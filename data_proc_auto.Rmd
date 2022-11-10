@@ -1,0 +1,96 @@
+---
+title: "Отчет с описательными статистиками"
+author: "Alisa Seleznyova"
+date: "2022-11-10"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(readxl)
+library(flextable)
+library(gtsummary)
+library(dplyr)
+```
+
+```{r}
+#Посмотреть на данные
+df <- read_excel("data_excel.xlsx")
+#нужно что-то сделать со страницей визитов, возможно сделать отдельный столбец и обращаться
+#к нему при подсчете показателей крови
+#table(df$Группа)
+#table(df$Возраст)
+summary(df)
+```
+```{r}
+df <- df %>%
+  mutate_at(vars(`Базофилы_E1`:`Эритроциты_E2`), ~ gsub(",", ".", .) %>% as.numeric()) %>%
+  mutate_at(vars(`Группа`, `Пол`), ~ factor(.)) 
+summary(df)
+```
+После обзора данных, стало понятно, что некоторые показатели крови имеют отрицательные значения. 
+Я посчитала, что следует заменить их на NA. Помимо этого, в столбец с группой крови вместо пропущенных столбцов закралась Северная Америка, её я тоже заменила на NA.
+
+```{r}
+df <- df %>%
+  mutate_at(vars(`Базофилы_E1`:`Эритроциты_E2`), ~ ifelse(. <= 0, NA, .)) %>%
+  mutate(`Группа крови` = `Группа крови` %>% na_if("NA"))
+str(df)
+```
+Посчитаю описательные статистики для количественных переменных.
+```{r}
+#Cтатистики для каждой количественной переменной
+statistics_1 <- list(
+  `_Количество субъектов` = ~length(.x) %>% as.character(),
+  `_Есть данные` = ~sum(!is.na(.x)) %>% as.character(),
+  `_Нет данных` = ~sum(is.na(.x)) %>% as.character(),
+  `_Среднее значение` = ~ifelse(sum(!is.na(.x)) == 0, "н/п", mean(.x, na.rm = TRUE) %>% round(2) %>% as.character()),
+  `_Стандартное отклонение` = ~ifelse(sum(!is.na(.x)) == 0, "н/п", sd(.x, na.rm = TRUE) %>% round(2) %>% as.character()),
+  `_Размах` = ~ifelse(sum(!is.na(.x)) == 0, "н/п", (max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE)) %>% round(2)) %>% as.character(),
+  `_95% ДИ для среднего` = ~sd(.x, na.rm = TRUE) %>% round(2) %>% as.character(),
+  `_мин. - макс.` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", paste0(min(.x, na.rm = TRUE) %>% round(2), " - ", max(.x, na.rm = TRUE) %>% round(2))),
+  `_Медиана` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", median(.x, na.rm = TRUE) %>% round(2) %>% as.character()),
+  `_Q1 - Q3` = ~ifelse(sum(!is.na(.x)) == 0, "Н/П*", paste0(quantile(.x, 0.25, na.rm = TRUE) %>% round(2), " - ", quantile(.x, 0.75, na.rm = TRUE) %>% round(2)))
+)
+
+#Статистики по данным анализов крови
+df %>% 
+  select(`Группа`, where(is.numeric)) %>%
+  group_by(`Группа`) %>%
+  summarise(across(where(is.numeric), statistics_1)) %>%
+  pivot_longer(!`Группа`) %>%
+  separate(name, into = c("Переменная", "Статистика"), sep = "__") %>%
+  rename(`Значение` = value) %>%
+  flextable() %>%
+  theme_zebra() %>%
+  merge_v(c("Группа", "Переменная")) %>%
+  set_table_properties(width = 1, align = "center", layout = "autofit")
+```
+Посчитаю статистики для категориальных переменных.
+```{r}
+df %>% 
+  select(`Группа`, where(is.character)) %>%
+  mutate(`Группа крови` = `Группа крови` %>% replace_na("Нет данных") %>% as.factor()) %>%
+  count(`Группа`, `Группа крови`) %>%
+  group_by(`Группа`) %>%
+  mutate(`Процент по группе` = (n / sum(n)) %>% round(4) %>% `*`(100) %>% str_c("%")) %>%
+  ungroup() %>%
+  mutate(`Процент по выборке` = (n / sum(n)) %>% round(4) %>% `*`(100) %>% str_c("%")) %>%
+  flextable() %>%
+  theme_zebra() %>%
+  merge_v("Группа") %>%
+  set_table_properties(width = 1, align = "center", layout = "autofit")
+  
+```
+Таблица со сравнением двух групп.
+```{r}
+df %>%
+  tbl_summary(by = "Группа",  missing_text = "Нет данных") %>% 
+  add_p() %>%
+  as_flex_table()
+```
+Сколько красивых табличек можно делать с помощью  gtsummary...
+https://www.danieldsjoberg.com/gtsummary/articles/tbl_summary.html
+https://www.pipinghotdata.com/posts/2021-07-14-polished-summary-tables-in-r-with-gtsummary/
